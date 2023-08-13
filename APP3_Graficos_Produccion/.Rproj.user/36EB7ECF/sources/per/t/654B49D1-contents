@@ -1,0 +1,753 @@
+vDCA <- reactiveValues(prodData = NULL, prodDataMod = NULL, prodDataMod2 = NULL, prodDataMod3 = NULL, prodDataMod4 = NULL,
+                       prodDataMod5 = NULL, hyoMod = NULL, SEPDMod = NULL, LGMMod = NULL, key =NULL, is_outlier = NULL,
+                       DUONGMod = NULL, PLMod = NULL )
+keys <- reactiveVal()
+line_x <- reactiveVal(-0.5)
+line_x2 <- reactiveVal(5)
+data_origin <- reactiveVal(NULL)
+
+observeEvent(input$fileDCA,{
+  data_origin(input$fileDCA)
+  #print(data_origin())
+})
+
+#Tabla de carga de datos de produccion
+output$tableDCA1 <- renderRHandsontable({
+  
+  if(is.null(data_origin())){
+    #if(is.null(vDAC$prodData)){
+    #return()
+    #m <- matrix(NA_integer_, nrow = 6, ncol = 2)
+    c1 <- c(NA_real_,NA_real_,NA_real_,NA_real_,NA_real_,NA_real_,NA_real_,NA_real_)
+    c2 <- c(NA_real_,NA_real_,NA_real_,NA_real_,NA_real_,NA_real_,NA_real_,NA_real_)
+    c3 <- c(NA_real_,NA_real_,NA_real_,NA_real_,NA_real_,NA_real_,NA_real_,NA_real_)
+   
+    if(input$cumu_inclu == 1){
+      data <- data.frame(TIME = c1, RATE = c2, CUMULATIVE = c3)
+    }else{
+      data <- data.frame(TIME = c1, RATE = c2)
+    }
+    
+    #colnames(m)<-c("Well","Np")
+    #data <- data.frame(TIME = c1, RATE = c2)
+    rhandsontable(data, stretchH = "all")
+  }else{
+    # rhandsontable(head(read.table(file=input$fileFS$datapath, sep=input$sep, header = input$header, stringsAsFactors = input$stringAsFactors)), stretchH = "all")
+    
+    if(input$cumu_inclu == 1){
+      
+      data <- read.table(file=data_origin()$datapath, sep=input$sep, header = input$header)
+      
+      data <- data[,1:3]
+      
+      colnames(data) <- c("TIME", "RATE", "CUMULATIVE")
+      
+      rhandsontable(data, stretchH = "all",height = 300)
+      
+    }else{
+      data <- read.table(file=data_origin()$datapath, sep=input$sep, header = input$header)
+      
+      data <- data[,1:2]
+      
+      colnames(data) <- c("TIME", "RATE")
+      
+      rhandsontable(data, stretchH = "all",height = 300)
+    }
+
+    
+  }
+  
+  
+})
+
+#Boton Done
+observeEvent(input$DoneFile, {
+  
+  if(!is.null(data_origin())){
+    
+    data <- read.table(file=data_origin()$datapath, sep=input$sep, header = input$header)
+    load_data_DCA(data)
+  
+  }
+  
+})
+
+#Funcion cargar datos DCA
+load_data_DCA <- function(data){
+  if(input$cumu_inclu == 1){
+    colnames(data) <- c("TIME", "RATE", "CUMULATIVE")
+  }else{
+    colnames(data) <- c("TIME", "RATE")
+    
+    ttt <- seq(1,length(data$TIME))
+    
+    gp_data <-lapply(ttt,function(ttt){
+      
+      time <- data$TIME[1:ttt]
+      rate <- data$RATE[1:ttt]
+      #print(time)
+      AUC(time, rate, from = min(rate, na.rm = TRUE), 
+          to = max(time, na.rm = TRUE),
+          method = "step", subdivisions = 1000)
+    })
+    
+    
+    data$CUMULATIVE <- unlist(gp_data)
+  }
+  
+  vDCA$hyoMod <- NULL
+  vDCA$SEPDMod <- NULL
+  vDCA$LGMMod <- NULL
+  vDCA$DUONGMod <- NULL
+  vDCA$PLMod <- NULL
+  
+  Fet_ver_min <- min(data$RATE)/10
+  Fet_ver_max <- max(data$RATE)*1000
+  Fet_hor_min <- min(data$TIME)/100
+  Fet_hor_max <- max(data$TIME)*10000
+  if(Fet_hor_min == 0){
+    Fet_hor_min <-data$TIME[2]
+  }
+  Fet_ver_range <- lseq(Fet_ver_max, Fet_ver_min,20000)
+  Fet_hor_range <- lseq(Fet_hor_max, Fet_hor_min,20000)
+  
+  updateSliderTextInput(session, "Fet_ver", "Vertical displacement", choices  = Fet_ver_range, selected = Fet_ver_range[12000])
+  updateSliderTextInput(session, "Fet_hor", "Horizontal displacement", choices  = Fet_hor_range, selected = Fet_hor_range[12000])
+  
+  vDCA$prodData <- data
+  
+  ajustar_datos()
+}
+
+#Boton Load de ejemplos
+observeEvent(input$Load_examples, { 
+  
+  file_example <- data.frame(name = "Oil Well", datapath = "https://raw.githubusercontent.com/rigochando/examples_data/main/REH_18.csv", stringsAsFactors = FALSE)
+  #print(file_example)
+  #data_origin()$datapath <- "https://raw.githubusercontent.com/rigochando/examples_data/main/REH_18.csv"
+  data_origin(file_example)
+  #input$fileDCA$datapath <- 
+  
+  })
+
+# mechanism for managing selected points
+observeEvent(event_data("plotly_click",source = "DCA1"), {
+  
+  if(!is.null(event_data("plotly_click", source = "DCA1")$key)){
+    key_new <- event_data("plotly_click", source = "DCA1")$key
+    key_old <- keys()
+    
+    if (key_new %in% key_old) {
+      keys(setdiff(key_old, key_new))
+    } else {
+      keys(c(key_new, key_old))
+    }
+  }
+
+})
+
+#Lines
+observeEvent(event_data("plotly_relayout", source = "DCA1"), {
+
+
+  if (!is.null(event_data("plotly_relayout", source = "DCA1")[["shapes[0].x0"]])) {
+    xint <- event_data("plotly_relayout", source = "DCA1")[["shapes[0].x0"]]
+    #xpt <- x[which.min(abs(x - xint))]
+    line_x(xint)
+  } else {
+    #line_x()
+  }
+  
+  if (!is.null(event_data("plotly_relayout", source = "DCA1")[["shapes[1].x0"]])) {
+    xint2 <- event_data("plotly_relayout", source = "DCA1")[["shapes[1].x0"]]
+    #xpt <- x[which.min(abs(x - xint))]
+    line_x2(xint2)
+  } else {
+    #line_x()
+  }
+  
+  
+})
+
+#inicio segunda linea
+observeEvent(input$time_filter,
+             {
+               if(input$time_filter == 1){
+                 data <- vDCA$prodData
+                 line_x2(max(vDCA$prodData$TIME)+1)
+               }
+             }
+)
+
+
+#Dato para modelo
+modelDat_reac <- reactive({
+  
+  vDCA$key = row.names(vDCA$prodData)
+  is_outlier <- vDCA$key %in% keys()
+  print(is_outlier)
+  data <- vDCA$prodData
+  modelDat2 <- data[!is_outlier, ]
+  
+  
+  if(input$time_filter == 1){
+    
+    vDCA$is_outlier <- ifelse(data$TIME > line_x() & data$TIME < line_x2(), is_outlier, TRUE)
+    
+    #modelDat2 <-  modelDat2 %>% 
+     #             filter(TIME > line_x())
+    
+    modelDat2 <- data[!vDCA$is_outlier, ]
+    
+  }else{
+    vDCA$is_outlier <- is_outlier
+  }
+  
+  modelDat2
+  
+})
+
+#Grafico 1: time vs rate
+output$plotDCA <- renderPlotly({
+  
+  ay <- list(
+    overlaying = "y",
+    side = "right",
+    title = "Cumulative"
+  )
+  
+  line_hypebolic = list(color = input$colDCA_hyp, width = input$sizeL_DCA, dash = input$typeL_DCA)
+  line_SEPD = list(color = input$colDCA_SEPD, width = input$sizeL_DCA, dash = input$typeL_DCA)
+  line_LGM = list(color = input$colDCA_LGM, width = input$sizeL_DCA, dash = input$typeL_DCA)
+  line_DUONG = list(color = input$colDCA_DUONG, width = input$sizeL_DCA, dash = input$typeL_DCA)
+  line_PL = list(color = input$colDCA_PL, width = input$sizeL_DCA, dash = input$typeL_DCA)
+  
+  if(input$rateF_DCA == "Oil"){
+    unidad_gasto = input$rateUO.DCA
+  }else{
+    unidad_gasto = input$rateUG.DCA
+  }
+  
+  if (!is.null(vDCA$prodData)){
+    #vDCA$key = row.names(vDCA$prodData)
+    #vDCA$is_outlier <- vDCA$key %in% keys()
+    
+    data <- vDCA$prodData
+    modelDat <- modelDat_reac() #data[!vDCA$is_outlier, ]
+    
+    cols <- ifelse(vDCA$is_outlier, "gray90", input$colDCA_Data)
+    
+
+#marker = list(opacity = input$opaJF/100,size = input$sizePJF, color = input$colPJF,symbol = input$marketPJF, line = list(color = input$colPJF, width = 1))
+    p_p <- plot_ly(source = "DCA1", data, x = ~TIME, y = ~RATE) %>% 
+            add_markers(name = "Data", key = row.names(data), color = I(cols), marker = list(size = input$sizeDCA_Data, symbol = input$marketDCA_Data)) %>%
+            event_register("plotly_click")
+      
+    #Show time filter  
+    if(input$time_filter == 0){
+      p_p <- p_p %>% layout( xaxis = list(title = paste("Time: " , input$timeU_DCA),
+                           zeroline = TRUE, type = input$x_scale_DCA1),
+              yaxis = list(title = paste("Rate: " , unidad_gasto),
+                           zeroline = TRUE, type = input$y_scale_DCA1),
+              yaxis2 = ay,
+              legend = list(orientation = 'h', y = -0.1),
+              margin = list(l = 50, r = 50, b = 0, t = 50, pad = 0))
+    }else{
+      #lineas
+      line1 <- list(
+        type = "line", 
+        line = list(color = "gray", dash = "dot"),
+        x0 = line_x(), 
+        x1 = line_x(),
+        y0 = 0,
+        y1 = 1,
+        yref = "paper"
+      )
+      
+      line2 <- list(
+        type = "line", 
+        line = list(color = "gray", dash = "dot"),
+        x0 = line_x2(), 
+        x1 = line_x2(),
+        y0 = 0,
+        y1 = 1,
+        yref = "paper"
+      )
+      
+
+      p_p <- p_p %>% layout(xaxis = list(title = paste("Time: " , input$timeU_DCA),
+                                          zeroline = TRUE, type = input$x_scale_DCA1),
+                             yaxis = list(title = paste("Rate: " , unidad_gasto),
+                                          zeroline = TRUE, type = input$y_scale_DCA1),
+                             yaxis2 = ay,
+                             legend = list(orientation = 'h', y = -0.1),
+                             margin = list(l = 50, r = 50, b = 0, t = 50, pad = 0),
+                             shapes = list(line1, line2))%>%
+                              config(editable = TRUE) 
+    }
+             
+    
+    if(input$cumu_show == 1){
+      p_p <- p_p %>% add_trace(data = data,x =  ~TIME, y = ~CUMULATIVE, marker = list(color = input$colDCA_Data, size = input$sizeDCA_Data, symbol = input$marketDCA_Data),
+                               name = "Cumulative", mode = "markers", yaxis = "y2")
+    }
+    
+    if (!is.null(vDCA$hyoMod) && "Hyperbolic" %in% input$DCA_Models){
+      datos_modelo()
+      p_p <- p_p %>% add_trace(data = vDCA$prodDataMod,x =  ~TIME, y = ~Hyperbolic, name = "Hyperbolic", mode = "lines", line = line_hypebolic) 
+      if(input$cumu_show == 1){
+        p_p <- p_p %>% add_trace(data = vDCA$prodDataMod, x =  ~TIME, y = ~CUMULATIVE, name = "Hyperbolic", showlegend = F, mode = "lines", yaxis = "y2", line = line_hypebolic)
+      }
+    }
+    
+    if (!is.null(vDCA$SEPDMod) && "SEPD" %in% input$DCA_Models){
+      datos_modelo_SEPD()
+      p_p <- p_p %>% add_trace(data = vDCA$prodDataMod2,x =  ~TIME, y = ~SEPD, name = "SEPD", mode = "lines" , line = line_SEPD) 
+      if(input$cumu_show == 1){
+        p_p <- p_p %>% add_trace(data = vDCA$prodDataMod2, x =  ~TIME, y = ~CUMULATIVE, name = "SEPD", showlegend = F, mode = "lines", yaxis = "y2", line = line_SEPD)
+      }
+    }
+    
+    if (!is.null(vDCA$LGMMod) && "LGM" %in% input$DCA_Models){
+      datos_modelo_LGM()
+      p_p <- p_p %>% add_trace(data = vDCA$prodDataMod3,x =  ~TIME, y = ~LGM, name = "LGM", mode = "lines", line = line_LGM) 
+      if(input$cumu_show == 1){
+        p_p <- p_p %>% add_trace(data = vDCA$prodDataMod3, x =  ~TIME, y = ~CUMULATIVE, name = "LGM", showlegend = F, mode = "lines", yaxis = "y2", line = line_LGM)
+      }
+      
+    }
+    
+    if (!is.null(vDCA$DUONGMod) && "DUONG" %in% input$DCA_Models){
+      datos_modelo_DOUNG()
+      p_p <- p_p %>% add_trace(data = vDCA$prodDataMod4,x =  ~TIME, y = ~DOUNG, name = "DOUNG", mode = "lines", line = line_DUONG)
+      if(input$cumu_show == 1){
+        p_p <- p_p %>% add_trace(data = vDCA$prodDataMod4, x =  ~TIME, y = ~CUMULATIVE, name = "DOUNG", showlegend = F, mode = "lines", yaxis = "y2", line = line_DUONG)
+      }
+      
+    }
+    
+    if (!is.null(vDCA$PLMod) && "POWER-LAW" %in% input$DCA_Models){
+      datos_modelo_PL()
+      p_p <- p_p %>% add_trace(data = vDCA$prodDataMod5,x =  ~TIME, y = ~POWER_LAW, name = "POWER LAW", mode = "lines",  line = line_PL) 
+      if(input$cumu_show == 1){
+        p_p <- p_p %>% add_trace(data = vDCA$prodDataMod5, x =  ~TIME, y = ~CUMULATIVE, name = "POWER LAW", showlegend = F, mode = "lines", yaxis = "y2",  line = line_PL)
+      }
+    }
+
+    p_p 
+    
+  }else{
+    
+    p <- ggplot() +
+      xlab(paste("Time: " ,input$timeU_DCA)) +
+      ylab(paste("Rate: " , unidad_gasto))  
+    
+    p_p <- ggplotly(p)
+  }
+  
+  p_p
+  
+  
+})
+
+
+
+#Datos de modelo hyperbolico
+datos_modelo <- reactive({
+  
+  # if(is.null(vDCA$is_outlier)){
+  #   data.nls  <- vDCA$prodData
+  # }else{
+  #   data.nls  <- vDCA$prodData[!vDCA$is_outlier, ]
+  # }
+  
+  data.nls  <- modelDat_reac()
+  
+  model1 <- modelo_Hyp(data.nls)
+  coe_hyp <- coefficients(model1)
+  
+  data.nls$Hyperbolic <- fitted(model1)
+  data.nls$CUMULATIVE <- (coe_hyp[1]/(coe_hyp[2]*(1-coe_hyp[3])))*(1-(fitted(model1)/coe_hyp[1])^(1-coe_hyp[3]))
+  
+  vDCA$hyoMod <- coefficients(model1)
+  vDCA$prodDataMod <- data.nls
+  
+  
+})
+
+#Datos de modelo SEPD
+datos_modelo_SEPD <- reactive({
+  
+  # if(is.null(vDCA$is_outlier)){
+  #   data.nls  <- vDCA$prodData
+  # }else{
+  #   data.nls  <- vDCA$prodData[!vDCA$is_outlier, ]
+  # }
+  
+  data.nls  <- modelDat_reac()
+  
+  model_SEPD <- modelo_SEPD(data.nls)
+  print(coefficients(model_SEPD))
+  data.nls$SEPD <- fitted(model_SEPD)
+  
+  
+  
+  #print(coefficients(model_SEPD))
+  #Resultados SEPD
+  vDCA$SEPDMod <- c(max(data.nls$RATE),coefficients(model_SEPD))
+  
+  #Calculo de acumulado
+  ttt_SEPD <- seq(1,length(data.nls$TIME))
+  
+  gp_pred_SEPD <-lapply(ttt_SEPD,function(ttt_SEPD){
+    
+    time <- data.nls$TIME[1:ttt_SEPD]
+    rate <- data.nls$SEPD[1:ttt_SEPD]
+    #print(time)
+    AUC(time, rate, from = min(rate, na.rm = TRUE), 
+        to = max(time, na.rm = TRUE),
+        method = "step", subdivisions = 1000)
+    
+  })
+  
+  
+  data.nls$CUMULATIVE <- unlist(gp_pred_SEPD)
+  
+  print(vDCA$SEPDMod)
+  vDCA$prodDataMod2 <- data.nls
+  
+  
+})
+
+#Datos de modelo LGM
+datos_modelo_LGM <- reactive({
+  
+  # if(is.null(vDCA$is_outlier)){
+  #   data.nls  <- vDCA$prodData
+  # }else{
+  #   data.nls  <- vDCA$prodData[!vDCA$is_outlier, ]
+  # }
+  
+  data.nls  <- modelDat_reac()
+  
+  model_LGM <- modelo_LGM(data.nls)
+  print(coefficients(model_LGM))
+  data.nls$LGM <- fitted(model_LGM)
+  
+  coe_LGM <- coefficients(model_LGM)
+  
+  data.nls$CUMULATIVE <- (coe_LGM[1]*data.nls$TIME^coe_LGM[2])/(coe_LGM[3]+data.nls$TIME^coe_LGM[2])
+    
+  print(coefficients(model_LGM))
+  vDCA$LGMMod <- coefficients(model_LGM)
+  vDCA$prodDataMod3 <- data.nls
+  
+  
+})
+
+
+#Datos de modelo DUNG
+datos_modelo_DOUNG <- reactive({
+  
+  # if(is.null(vDCA$is_outlier)){
+  #   data.nls  <- vDCA$prodData
+  # }else{
+  #   data.nls  <- vDCA$prodData[!vDCA$is_outlier, ]
+  # }
+  
+  data.nls  <- modelDat_reac()
+  
+  model_DOUNG <- modelo_DOUNG(data.nls)
+  print(coefficients(model_DOUNG))
+  data.nls$DOUNG <- fitted(model_DOUNG)
+  
+  coe_DOUNG <- coefficients(model_DOUNG)
+  data.nls$CUMULATIVE <- (coe_DOUNG[1]/coe_DOUNG[2])*exp((coe_DOUNG[2]/(1-coe_DOUNG[3]))*(data.nls$TIME^(1-coe_DOUNG[3])-1))
+  
+  print(coefficients(model_DOUNG))
+  vDCA$DUONGMod <- coefficients(model_DOUNG)
+  vDCA$prodDataMod4 <- data.nls
+  
+  
+})
+
+
+#Datos de modelo POWER-LAW
+datos_modelo_PL <- reactive({
+  
+  # if(is.null(vDCA$is_outlier)){
+  #   data.nls  <- vDCA$prodData
+  # }else{
+  #   data.nls  <- vDCA$prodData[!vDCA$is_outlier, ]
+  # }
+  
+  data.nls  <- modelDat_reac()
+  
+  model_PL <- modelo_PL(data.nls)
+  print(coefficients(model_PL))
+  data.nls$POWER_LAW <- fitted(model_PL)
+  
+  
+
+  #Calculo de acumulado
+  ttt_PL <- seq(1,length(data.nls$TIME))
+  
+  gp_pred_PL <-lapply(ttt_PL,function(ttt_PL){
+    
+    time <- data.nls$TIME[1:ttt_PL]
+    rate <- data.nls$POWER_LAW[1:ttt_PL]
+    #print(time)
+    AUC(time, rate, from = min(rate, na.rm = TRUE), 
+        to = max(time, na.rm = TRUE),
+        method = "step", subdivisions = 1000)
+  })
+  
+  
+  data.nls$CUMULATIVE <- unlist(gp_pred_PL)
+  
+  print(coefficients(model_PL))
+  vDCA$PLMod <- coefficients(model_PL)
+  vDCA$prodDataMod5 <- data.nls
+  
+  
+})
+
+
+
+#Ajuste de modelo
+observeEvent(input$DCA_Models, {
+  
+  ajustar_datos()
+  
+  
+})
+
+#Funcion ajustar datos
+ajustar_datos <- function(){
+  
+  if (!is.null(vDCA$prodData)){
+    
+    if("Hyperbolic" %in% input$DCA_Models ){
+      
+      datos_modelo()
+      
+    }
+    
+    if("SEPD" %in% input$DCA_Models){
+      
+      datos_modelo_SEPD()
+      
+    }
+    
+    if("LGM" %in% input$DCA_Models){
+      
+      datos_modelo_LGM()
+      
+    }
+    
+    if("DUONG" %in% input$DCA_Models){
+      
+      datos_modelo_DOUNG()
+      
+    }
+    
+    if("POWER-LAW" %in% input$DCA_Models){
+      
+      datos_modelo_PL()
+      
+    }
+    
+  }
+  
+}
+
+#Resultados DCA modelo hiperbolico
+# output$DCAHyp_R <- DT::renderDataTable({
+#   
+#   if(input$rateF_DCA == "Oil"){
+#     unidad_gasto = input$rateUO.DCA
+#   }else{
+#     unidad_gasto = input$rateUG.DCA
+#   }
+#   
+#   c1 <- c("qi", "Di", "b")
+#   c2 <- c("-", "-", "-")
+#   c3 <- c(unidad_gasto, paste("1/", input$timeU_DCA), " ")
+#   
+#   if (!is.null(vDCA$hyoMod )){
+#     data <- vDCA$hyoMod
+#     data_hyp <- data.frame(c1, round(data, 4),c3)
+#     colnames(data_hyp) <- c(" "," ", " ")
+#     data <- as.data.frame(data_hyp)
+#     
+#   }else{
+# 
+#     data_hyp <- data.frame(c1,c2,c3)
+#     colnames(data_hyp) <- c(" "," ", " ")
+#     data <- as.data.frame(data_hyp)
+#     
+#   }
+#   data
+#   
+# }, rownames = FALSE,extensions = 'Scroller', options = list(dom = 'ft',scrollX = TRUE,fixedColumns = list(leftColumns = 1),scrollY = 150,
+#                                                             scroller = TRUE,searching = FALSE,lengthMenu = list(c(-1), c("All")))
+# 
+# )
+
+
+output$DCAHyp_R <- renderRHandsontable({
+  
+  if(input$rateF_DCA == "Oil"){
+    unidad_gasto = input$rateUO.DCA
+  }else{
+    unidad_gasto = input$rateUG.DCA
+  }
+  
+  c1 <- c("qi", "Di", "b")
+  c2 <- c("-", "-", "-")
+  c3 <- c(unidad_gasto, paste("1/", input$timeU_DCA), " ")
+  
+  if (!is.null(vDCA$hyoMod )){
+    data <- vDCA$hyoMod
+    data_hyp <- data.frame(c1, round(data, 4),c3, stringsAsFactors = FALSE, row.names = NULL)
+    colnames(data_hyp) <- c(" ","  ", "   ")
+    data <- data_hyp #as.data.frame(data_hyp, stringsAsFactors = FALSE)
+    
+  }else{
+    
+    data_hyp <- data.frame(c1,c2,c3, stringsAsFactors = FALSE, row.names = NULL)
+    colnames(data_hyp) <- c(" ","  ", "   ")
+    data <- data_hyp #as.data.frame(data_hyp, stringsAsFactors = FALSE)
+    
+  }
+  
+  rhandsontable(data, stretchH = "all", colHeaders = NULL, rowHeaders = NULL)
+  
+  
+}                                               
+)
+
+
+#Resultados DCA modelo SEPD
+output$DCASEPD_R <- renderRHandsontable({
+  
+  if(input$rateF_DCA == "Oil"){
+    unidad_gasto = input$rateUO.DCA
+  }else{
+    unidad_gasto = input$rateUG.DCA
+  }
+  
+  c1 <- c("qi", "\U1D70F", "n")
+  c2 <- c("-", "-", "-")
+  c3 <- c(unidad_gasto, input$timeU_DCA, " ")
+  
+  if (!is.null(vDCA$SEPDMod )){
+    data <- vDCA$SEPDMod
+    data_SEPD <- data.frame(c1, round(data, 4),c3, stringsAsFactors = FALSE, row.names = NULL)
+    colnames(data_SEPD) <- c(" ","  ", "   ")
+    data <- as.data.frame(data_SEPD)
+    
+  }else{
+    
+    data_SEPD <- data.frame(c1,c2,c3, stringsAsFactors = FALSE, row.names = NULL)
+    colnames(data_SEPD) <- c(" ","  ", "   ")
+    data <- as.data.frame(data_SEPD)
+    
+  }
+  
+  
+  rhandsontable(data, stretchH = "all", colHeaders = NULL, rowHeaders = NULL)
+  
+})
+
+
+#Resultados DCA modelo LGM
+output$DCALGM_R <- renderRHandsontable({
+  
+  c1 <- c("K", "n", "a")
+  c2 <- c("-", "-", "-")
+  c3 <- c(" ", " ", " ")
+  
+  if (!is.null(vDCA$LGMMod )){
+    data <- vDCA$LGMMod
+    data_LGM <- data.frame(c1, round(data, 8),c3, stringsAsFactors = FALSE, row.names = NULL)
+    colnames(data_LGM) <- c(" ","  ", "   ")
+    data <- as.data.frame(data_LGM)
+    
+  }else{
+    
+    data_LGM <- data.frame(c1,c2,c3, stringsAsFactors = FALSE, row.names = NULL)
+    colnames(data_LGM) <- c(" ","  ", "   ")
+    data <- as.data.frame(data_LGM)
+    
+  }
+  
+  rhandsontable(data, stretchH = "all", colHeaders = NULL, rowHeaders = NULL)
+  
+})
+
+
+#Resultados DCA modelo DUONG
+output$DCADUONG_R <- renderRHandsontable({
+  
+  if(input$rateF_DCA == "Oil"){
+    unidad_gasto = input$rateUO.DCA
+  }else{
+    unidad_gasto = input$rateUG.DCA
+  }
+  
+  c1 <- c("qi", "a", "m")
+  c2 <- c("-", "-", "-")
+  c3 <- c(unidad_gasto, " ", " ")
+  
+  if (!is.null(vDCA$DUONGMod )){
+    data <- vDCA$DUONGMod
+    data_DUONG <- data.frame(c1, round(data, 8),c3, stringsAsFactors = FALSE, row.names = NULL)
+    colnames(data_DUONG) <- c(" ","  ", "   ")
+    data <- as.data.frame(data_DUONG)
+    
+  }else{
+    
+    data_DUONG <- data.frame(c1,c2,c3, stringsAsFactors = FALSE, row.names = NULL)
+    colnames(data_DUONG) <- c(" ","  ", "   ")
+    data <- as.data.frame(data_DUONG)
+    
+  }
+  
+  rhandsontable(data, stretchH = "all", colHeaders = NULL, rowHeaders = NULL)
+  
+})
+
+
+
+
+#Resultados DCA modelo POWER-LAW
+output$DCAPOWER_LAW_R <- renderRHandsontable({
+  
+  if(input$rateF_DCA == "Oil"){
+    unidad_gasto = input$rateUO.DCA
+  }else{
+    unidad_gasto = input$rateUG.DCA
+  }
+  
+  c1 <- c("qi", "D\U221E", "D\U005E", "n")
+  c2 <- c("-", "-", "-", "-")
+  c3 <- c(unidad_gasto, " ", " ", " ")
+  
+  if (!is.null(vDCA$PLMod)){
+    data <- vDCA$PLMod
+    data_PL <- data.frame(c1, round(data, 8),c3, stringsAsFactors = FALSE, row.names = NULL)
+    colnames(data_PL) <- c(" ","  ", "   ")
+    data <- as.data.frame(data_PL)
+    
+  }else{
+    
+    data_PL <- data.frame(c1,c2,c3, stringsAsFactors = FALSE, row.names = NULL)
+    colnames(data_PL) <- c(" ","  ", "   ")
+    data <- as.data.frame(data_PL)
+    
+  }
+  
+  rhandsontable(data, stretchH = "all", colHeaders = NULL, rowHeaders = NULL)
+})
+

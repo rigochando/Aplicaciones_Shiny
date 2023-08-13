@@ -1,0 +1,558 @@
+#datos_sim: tabla vacia 
+#datos_sim: variable de carga de datos de excel
+#dec_per: DF de calculo de periodos de declinación
+#dec_fac_ DF de calculo de factores de declinación y Gasto inicial
+
+v_An <- reactiveValues(datos_sim = NULL, datos_sim2 = NULL, datos_sim2_campo = NULL, dec_per = NULL,
+                       dec_fac = NULL, datos_sim_rate = NULL,
+                       datos_sim2_reserva = NULL)
+
+
+
+#v_An$data_prod <- read.csv("E:/PROYECTOS_Carmen/Sim/Pruebas/zaap.csv")
+id <- c("Nvo.ID","Fluido", "Campo", "Plataforma", "Pozo", 
+        "Formacion", "Reserva", "SAP", "CP", "Unidad",  "Tipo", "suma")
+
+#Carga de datos
+observeEvent(input$file,{
+  
+  if(!is.null(input$file)){ 
+    
+    datos_sim <- read_excel(input$file$datapath, sheet = 1)
+    datos_sim <- as.data.frame(datos_sim)
+    
+    nombre <- colnames(datos_sim)
+    names(datos_sim) <- c("Nvo.ID","Fluido", "Campo", "Plataforma", "Pozo", 
+                          "Formacion", "Reserva", "SAP", "CP", "Unidad",  "Tipo", "suma", nombre[13:length(nombre)])
+    
+    v_An$datos_sim <- datos_sim
+    
+    #Crear data.frame
+    id <- c("Nvo.ID","Fluido", "Campo", "Plataforma", "Pozo", 
+            "Formacion", "Reserva", "SAP", "CP", "Unidad",  "Tipo", "suma")
+    
+    datos_sim2 <- reshape2::melt(datos_sim,id.vars=id)
+    #print(head(qt_s))
+    colnames(datos_sim2) <- c(id,"date","q")
+    datos_sim2$date <- as.Date(datos_sim2$date, "%d/%m/%Y")
+    datos_sim2$Nvo.ID <- as.factor(datos_sim2$Nvo.ID)
+    
+    
+    datos_sim2 <- datos_sim2 %>%
+      filter(!is.na(q)) %>%
+      as.data.frame()
+    
+    #Calcular Qg Zt
+    datos_sim_Zt <- datos_sim2  %>%
+      dplyr::group_by(Nvo.ID, date) %>%
+      dplyr::mutate(q = ifelse(length(q[Fluido == "Qg Zt Hc"]) > 0, 
+                               q[Fluido == "Qg Zt Hc"] + ifelse(length(q[Fluido == "Qg Zt N2"]) > 0, 
+                                                                q[Fluido == "Qg Zt N2"],0), #q[Fluido == "Qg Zt N2"]
+                               NA)
+      ) %>%
+      filter(Fluido == "Qg Zt Hc") %>%
+      as.data.frame()
+    
+    #Si tiene Zt///////////////////////////////////////////////////////////////////////////////////////////
+    if(nrow(datos_sim_Zt) >0){
+      datos_sim_Zt$Fluido <- "Qg Zt"
+      
+      #Calcular Qg total
+      datos_sim_Qg <- datos_sim2 %>%
+        dplyr::group_by(Nvo.ID, date) %>%
+        dplyr::mutate(q = ifelse(length(q[Fluido == "Qg Zt Hc"]) > 0, q[Fluido == "Qg Zt Hc"] + ifelse(length(q[Fluido == "Qg Zt N2"]) > 0, 
+                                                                                                       q[Fluido == "Qg Zt N2"],0) + q[Fluido == "Qg Form"], q[Fluido == "Qg Form"])
+        ) %>%
+        filter(Fluido == "Qg Form")%>%
+        as.data.frame()
+      
+      datos_sim_Qg$Fluido <- "Qg"
+      
+      datos_sim2 <- rbind(datos_sim2, datos_sim_Zt)
+      datos_sim2 <- rbind(datos_sim2, datos_sim_Qg)
+    }
+    #merge(datos_sim2, datos_sim_Zt,all = TRUE)
+    
+    #Qg = ifelse(!is.na(Qg.Zt), q[Fluido == "Qg Form"] + Qg.Zt[Fluido == "Qg Form"], q[Fluido == "Qg Form"])
+    
+    datos_sim2$dias <-  days_in_month(datos_sim2$date)
+    datos_sim2$acu_day <- datos_sim2$q*datos_sim2$dias
+    
+    #Np por pozo
+    datos_sim2 <- datos_sim2  %>%
+      dplyr::group_by(Pozo, Fluido) %>% 
+      arrange(date) %>%
+      dplyr::mutate(Np_pozo = cumsum(acu_day)/1000) %>%
+      as.data.frame()
+    
+    #Np por ID
+    datos_sim2 <- datos_sim2  %>%
+      dplyr::group_by(Nvo.ID, Fluido) %>% 
+      arrange(date) %>%
+      dplyr::mutate(Np_ID = cumsum(acu_day)/1000) %>%
+      as.data.frame()
+    
+    #calculo de ZT total
+    #datos_sim2$Qg.Zt <- datos_sim2
+    # datos_sim_fil<- datos_sim2 %>%
+    #   filter(Fluido == "Qo", q > 0, Pozo == input$filter_pro2)
+    
+    v_An$datos_sim2 <- datos_sim2
+    
+    #Estimar valores a nivel de campo: gasto y Np
+    
+    datos_sim2_campo <- datos_sim2 %>%
+      group_by(date, Fluido) %>%
+      summarize(Oil_prod = sum(q, na.rm = TRUE))
+    
+    datos_sim2_campo$dias <-  days_in_month(datos_sim2_campo$date)
+    datos_sim2_campo$acu_day <- datos_sim2_campo$Oil_prod*datos_sim2_campo$dias
+    
+    datos_sim2_campo <- datos_sim2_campo  %>%
+      group_by(Fluido) %>%
+      arrange(date) %>%
+      dplyr::mutate(Np = cumsum(acu_day)/1000)
+    
+    v_An$datos_sim2_campo <- datos_sim2_campo
+    
+    updateSelectInput(session, "ID_plot", label = "ID", choices = c("Todos",as.character(sort(unique(datos_sim2$Nvo.ID)))),selected = "Todos")
+    
+    
+    #Estimar valores por reserva
+    
+    datos_sim2_reserva <- datos_sim2 %>%
+      group_by(SAP, date, Fluido) %>%
+      summarize(Oil_prod = sum(q, na.rm = TRUE)) %>%
+      as.data.frame()
+    
+    datos_sim2_reserva$dias <-  days_in_month(datos_sim2_reserva$date)
+    datos_sim2_reserva$acu_day <- datos_sim2_reserva$Oil_prod*datos_sim2_reserva$dias
+    
+    datos_sim2_reserva <- datos_sim2_reserva  %>%
+      group_by(SAP, Fluido) %>%
+      arrange(date) %>%
+      dplyr::mutate(Np = cumsum(acu_day)/1000)
+    
+    
+    v_An$datos_sim2_reserva <- datos_sim2_reserva
+    
+    #Tablas uptime
+    
+    data_uptime <- datos_sim %>%
+      filter(Fluido == "Qo") %>%
+      as.data.frame()
+    
+    data_uptime <- data_uptime[,c("Nvo.ID", nombre[13:length(nombre)])]
+    
+    for(i in 2:ncol(data_uptime)){
+      data_uptime[,i] <- 1 
+    }
+    
+    vP$uptime <- data_uptime
+    
+    
+    }
+  
+})
+
+
+#Tabla pronostico sim
+output$Datos_sim = renderRHandsontable({
+  
+  if(!is.null(v_An$datos_sim2)){
+    
+    rhandsontable(v_An$datos_sim, stretchH = "all")
+    
+  }
+  
+  
+})
+
+
+#Grafico gastos Qo
+output$plot_qo <- renderPlotly({ 
+  
+  if(!is.null(v_An$datos_sim2)){
+    
+    datos_sim_fil<- v_An$datos_sim2 %>%
+      filter(Fluido == "Qo", q > 0)
+    
+    if(input$ID_plot != "Todos"){
+      datos_sim_fil <- datos_sim_fil %>%
+        filter(Nvo.ID == as.character(input$ID_plot))
+    }
+    
+    #    dataFFS <- dataFFS %>% 
+    #filter(!!rlang::sym(input$filterFS) <= input$sliderFilterFS[2])
+    
+    p_p <- plot_ly() %>%
+          add_trace(data = datos_sim_fil, x = ~date, y = ~q, color = ~Nvo.ID, mode = "lines+markers",
+                    text = ~paste('</br>Pozo: ', Pozo,
+                                 '</br>Plataforma: ', Plataforma,
+                                 '</br>Tipo: ', Tipo,
+                                 '</br>Fecha: ', date,
+                                 '</br>Qo: ', q),
+                    hoverinfo = 'text') %>% 
+          layout(xaxis = list(title = "Año", titlefont = list(size = 15)), 
+                 yaxis = list(title = "Qo [Mbpd]",tickformat = ".1f", titlefont = list(size = 15)))
+    
+    if(!is.null(v_An$dec_per)){
+      
+      dec_per <- v_An$dec_per 
+      
+      if(input$ID_plot != "Todos"){
+        dec_per <- dec_per %>%
+          filter(Nvo.ID == as.character(input$ID_plot))
+      }
+      
+      p_p <- p_p %>% 
+            add_trace(data = dec_per, x = ~Fecha1, y = ~Qo1, color = ~Nvo.ID, mode = "markes",
+                      marker = list(
+                        color = 'grey',
+                        size = 15,
+                        line = list(
+                          color = 'black',
+                          width = 3
+                        )
+                      ), showlegend = FALSE) %>% 
+            add_trace(data = dec_per, x = ~Fecha2, y = ~Qo2, color = ~Nvo.ID, mode = "markes",
+                      marker = list(
+                        color = 'grey',
+                        size = 15,
+                        line = list(
+                          color = 'black',
+                          width = 3
+                        )
+                      ), showlegend = FALSE)
+      
+    }
+    
+    #ggplotly(ggplot(datos_sim_fil, aes(date, q, color = as.factor(Nvo.ID))) + geom_line())
+    
+  }else{
+    
+    p <- ggplot() +
+      xlab("Año") +
+      ylab("Qo [Mbpd]") +
+      theme(axis.title = element_text(size = 15))
+    
+    p_p <- ggplotly(p)
+    
+  }
+  
+  p_p
+  
+})
+
+
+#Calculo de periodos de declinación 
+observeEvent(input$Bu_dec_per, {
+  
+  show_modal_spinner(spin = "cube-grid",color = "firebrick", text = "Calculo de periodos de declinación ...")
+  #fecha max
+  datos_sim_fil<- v_An$datos_sim2 %>%
+    filter(Fluido == "Qo", q > 0) %>% 
+    as.data.frame()
+  
+  # datos_sim_fil<- v_An$datos_sim2 %>%
+  #   filter(Fluido == "Qo", q > 0)
+  
+  max_date <- datos_sim_fil %>% 
+    group_by(Nvo.ID) %>%
+    summarize(date_max = date[which(q == max(q))], maxqo = max(q), date_final = max(date)) %>% 
+    as.data.frame()
+  
+  max_date <- max_date %>%
+              group_by(Nvo.ID) %>%
+              summarize(date_max = min(date_max) , maxqo = max(maxqo), date_final = max(date_final)) %>% 
+    as.data.frame()
+  
+  max_date <- as.data.frame(max_date)
+  
+  datos_sim_rate <- merge(as.data.frame(datos_sim_fil), max_date, by="Nvo.ID", all = TRUE)
+  head(datos_sim_rate)
+  
+  datos_sim_rate <- datos_sim_rate %>%
+    filter(date >= date_max) %>%
+    arrange(Nvo.ID) %>% 
+    as.data.frame()
+  
+  
+  v_An$datos_sim_rate <- datos_sim_rate
+  #obtener cambio de tendencia de dataframe
+  ID <- sort(unique(datos_sim_rate$Nvo.ID)) 
+  
+  Gas_i <- vector(length = length(ID))
+  date_gas <- vector(length = length(ID), mode = "character")
+  date1 <- vector(length = length(ID), mode = "character")
+  max_qo <- vector(length = length(ID))
+  sec_qo <- vector(length = length(ID))
+  
+  for(j in 1:length(ID)){
+    data <-  datos_sim_rate %>%  #datos_sim_rate[datos_sim_rate$Nvo.ID == ID[1],]
+      filter(Nvo.ID == ID[j]) %>%
+      arrange(date) %>% 
+      as.data.frame()
+    
+    df <- data.frame(x = c(1:nrow(data)-1), y =log(data$q*1000))
+    
+    index <- 0
+    n <- nrow(df)
+    dfR <- vector(length = n)
+    if(n >= 5){  
+      
+      model_c <- lm(y ~ x,df)
+      dfR_a <- summary(model_c)$r.squared
+      
+      print(as.character(ID[j]))
+      print(dfR_a)
+      
+      #if(dfR_a < 0.995){
+        for (i in 1:(n-2)) {
+          df3 <- df[i:(i+2),]
+          #print(df3)
+          model <- lm(y ~ x,df3)
+          dfR[i] <- summary(model)$r.squared
+        }
+        
+        dfR <- dfR[1:(n-2)]
+        dfR_1 <- dfR < 0.97
+        dfR_2 <- dfR < 0.9
+        #Con 0.95
+        for(i in 2:((length(dfR_1))-1)){
+          if(dfR_1[i] == TRUE & dfR_1[i-1] == FALSE & dfR_1[i+1] == FALSE){
+            index <- i + 1
+          }
+        }
+        
+        #Con 0.9
+        if(index == 0){
+          
+          for(i in 2:((length(dfR_2))-1)){
+            if(dfR_2[i] == TRUE & dfR_2[i-1] == FALSE & dfR_2[i+1] == FALSE){
+              index <- i + 1
+            }
+          }
+        }
+      #}
+      
+    }
+    #print(ID[j])
+    #print(index)
+    Gas_i[j] <- index 
+    date1[j] <- as.character(max(data$date_max))
+    max_qo[j] <- max(data$maxqo)
+    
+    if (index != 0){
+      date_gas[j] <- as.character(data$date[index])
+      sec_qo[j] <- data$q[index]
+    }
+    
+    
+    
+  }
+  
+  gas_df <- data.frame(Nvo.ID = ID,
+                       Fecha1 = as.Date(date1, "%Y-%m-%d"),
+                       Qo1 = max_qo,
+                       Fecha2 = as.Date(date_gas, "%Y-%m-%d"),
+                       Qo2 = sec_qo)
+  
+  gas_df <- gas_df %>%
+    arrange(Nvo.ID)
+  
+  head(gas_df)
+  
+  v_An$dec_per <- gas_df
+  remove_modal_spinner()
+})
+
+#Tabla periodos de declinación
+output$dec_per = renderRHandsontable({
+  
+  if(!is.null(v_An$dec_per)){
+    
+    rhandsontable(v_An$dec_per, stretchH = "all")
+    
+  }else{
+  Nvo.ID <- rep("", 15)
+  Fecha1 <- rep("", 15)
+  Qo1 <- rep("", 15)
+  Fecha2 <- rep("", 15)
+  Qo2 <- rep("", 15)
+  Dec_per <- data.frame(Nvo.ID, Fecha1, Qo1, Fecha2, Qo2, stringsAsFactors = TRUE)
+  #colnames(PozosData) <- c("Nvo ID","Fluido","Campo","Plataforma","Formacion", "Pozo", "Reserva", "SAP", "Unidad","Tipo", "Fecha de entrada", "Fecha de salida")
+  
+  rhandsontable(Dec_per, stretchH = "all")
+  }
+  
+})
+
+
+#Calculo de factor de declinación 
+observeEvent(input$Bu_dec_fac, {
+  
+  show_modal_spinner(spin = "cube-grid",color = "firebrick", text = "Calculo de factor de declinación...")
+  gas_df <- v_An$dec_per
+  #datos_sim_rate <- v_An$datos_sim_rate[,1:20]
+  
+  
+  datos_sim_rate<- v_An$datos_sim2 %>%
+    filter(Fluido == "Qo", q > 0)
+  
+  
+  #datos_sim_rate2 <- merge(datos_sim_rate, gas_df, by="Nvo.ID", all = TRUE)
+  datos_sim_rate2 <- merge(datos_sim_rate, gas_df, by="Nvo.ID", all = TRUE)
+  datos_sim_rate2$date_max <- datos_sim_rate2$Fecha1
+  
+  
+  #datos_sim_rate2 <- merge(datos_sim_rate, gas_df, by="Nvo.ID", all = TRUE)
+  head(datos_sim_rate2)
+  #exp_fit <- 0
+  exp_fit <- data.frame(Nvo.ID = factor(),
+                        Qoi1 = numeric(), 
+                        Di1 = numeric(),
+                        Qoi2 = numeric(), 
+                        Di2 = numeric(), 
+                        stringsAsFactors=FALSE)
+  
+  ID <- as.character(gas_df$Nvo.ID)
+  
+  for(j in 1:length(ID)){ #length(ID)
+    #j = 1
+    print(ID[j])
+    data <-  datos_sim_rate2 %>%  #datos_sim_rate[datos_sim_rate$Nvo.ID == ID[1],]
+      filter(Nvo.ID == ID[j]) %>%
+      arrange(date)
+    
+    data <- data[data$date >= max(data$date_max),]
+    rownames(data) <- c(1:nrow(data))
+    #print(ID[j])
+    if(max(data$Qo2) == 0){
+      
+      #Periodo 1
+      df_D <- data.frame(x = c(1:nrow(data)-1), y =log(data$q*1000))
+      model <- lm(y ~ x,df_D)
+      Qoi <- as.numeric(exp(coefficients(model)[1])/1000)
+      Di <- as.numeric(coefficients(model)[2])
+      
+      #Perido 2
+      
+      Qoi2 <- NA
+      Di2 <- NA
+    }else{
+      #Periodo 1
+      meses1 <- interval(gas_df$Fecha1[gas_df$Nvo.ID == ID[j]], gas_df$Fecha2[gas_df$Nvo.ID == ID[j]]) %/% months(1)
+      df_D1<- data.frame(x = c(1:(meses1 + 1)-1), y =log(data$q*1000)[1:(meses1 + 1)])
+      
+      model <- lm(y ~ x,df_D1)
+      Qoi <- as.numeric(exp(coefficients(model)[1])/1000)
+      Di <- as.numeric(coefficients(model)[2])
+      
+      #Periodo 2
+      meses2 <- interval(gas_df$Fecha2[gas_df$Nvo.ID == ID[j]], data$date[nrow(data)]) %/% months(1)
+      df_D2<- data.frame(x = c(1:(meses2 + 1)-1), y =log(data$q[(meses1 + 1):nrow(data)]*1000))
+      
+      model <- lm(y ~ x,df_D2)
+      Qoi2 <- as.numeric(exp(coefficients(model)[1])/1000)
+      Di2 <- as.numeric(coefficients(model)[2])
+    }
+    
+    #print((ID[j]))
+    resul <- data.frame(ID[j], Qoi,  Di, Qoi2,  Di2)
+    exp_fit <- rbind(exp_fit, resul)
+
+    
+  }
+  
+  colnames(exp_fit) <- c("Nvo.ID", "Qoi", "Di", "Qoi2", "Di2")
+  #exp_fit <-exp_fit %>%
+    #arrange(Nvo.ID)
+  
+  
+  v_An$datos_sim_rate <- datos_sim_rate2
+  v_An$dec_fac <- exp_fit
+  
+  remove_modal_spinner()
+})
+
+#Tabla factor de declinación
+output$dec_fac = renderRHandsontable({
+  
+  if(!is.null(v_An$dec_fac)){
+    
+    rhandsontable(v_An$dec_fac, stretchH = "all")
+    
+  }else{
+    Nvo.ID <- rep("", 15)
+    Qoi <- rep("", 15)
+    Di <- rep("", 15)
+    Qoi2<- rep("", 15)
+    Di2<- rep("", 15)
+    Dec_fac <- data.frame(Nvo.ID, Qoi, Di, Qoi2, Di2, stringsAsFactors = TRUE)
+    #colnames(PozosData) <- c("Nvo ID","Fluido","Campo","Plataforma","Formacion", "Pozo", "Reserva", "SAP", "Unidad","Tipo", "Fecha de entrada", "Fecha de salida")
+    
+    rhandsontable(Dec_fac, stretchH = "all")
+  }
+  
+})
+
+
+#Actualizar de periodos de declinación 
+observeEvent(input$updateFechas, {
+  
+  if(!is.null(v_An$dec_per)){
+    
+    dec_per <- hot_to_r(input$dec_per)
+    dec_per <- data.frame(Nvo.ID = dec_per[,1],
+                           Fecha1 = as.Date(dec_per[,2], "%d/%m/%Y"),
+                           Fecha2 = as.Date(dec_per[,4], "%d/%m/%Y"),
+                           stringsAsFactors = FALSE)
+    
+    
+    #datos_sim_fil <- v_An$datos_sim_rate %>%
+    #  filter(Fluido == "Qo", q > 0)
+    
+    datos_sim_fil<- v_An$datos_sim2 %>%
+      filter(Fluido == "Qo", q > 0)
+    
+    
+    Qo1 <- 0
+    for(i in 1:nrow(dec_per)){
+      Qo1[i] <- datos_sim_fil$q[as.character(datos_sim_fil$Nvo.ID) == as.character(dec_per$Nvo.ID[i]) & 
+                               datos_sim_fil$date == dec_per$Fecha1[i]] 
+      print(i)
+    }
+     
+    dec_per$Qo1 <- Qo1
+    
+    Qo2 <- 0
+    for(i in 1:nrow(dec_per)){
+      Qo2[i] <- datos_sim_fil$q[as.character(datos_sim_fil$Nvo.ID) == as.character(dec_per$Nvo.ID[i]) & 
+                                  datos_sim_fil$date == dec_per$Fecha2[i]] 
+    }
+    
+    dec_per$Qo2 <- Qo2
+    dec_per$Qo2 <- ifelse(is.na(dec_per$Fecha2), 0, dec_per$Qo2)
+    
+    dec_per <-  dec_per[,c("Nvo.ID","Fecha1", "Qo1","Fecha2", "Qo2")]
+    
+    
+    v_An$dec_per <- dec_per
+    
+  }
+  
+  
+  
+})
+
+
+#Boton descargar datos de periodos de declinación
+output$descargarFechas<- downloadHandler(
+  filename = function() { "name.xlsx" },
+  
+  content = function(file) {
+    tempFile <- tempfile(fileext = ".xlsx")
+    write.xlsx(v_An$dec_per, tempFile)
+    file.rename(tempFile, file)
+  })

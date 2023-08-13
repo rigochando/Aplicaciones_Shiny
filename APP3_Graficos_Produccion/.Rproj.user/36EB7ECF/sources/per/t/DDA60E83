@@ -1,0 +1,26 @@
+{
+    "id": "DDA60E83",
+    "path": "~/Archivos_R/SNY Tools_V2/SNY_tools/server/Analisis_server.R",
+    "project_path": null,
+    "type": "r_source",
+    "hash": "3760365824",
+    "contents": "",
+    "dirty": false,
+    "created": 1691457253640.0,
+    "source_on_save": false,
+    "relative_order": 4,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "23,33",
+        "scrollLine": "4"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1624383022,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1624383022,
+    "read_only": false,
+    "read_only_alternatives": []
+}
